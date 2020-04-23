@@ -474,7 +474,7 @@ lazy val `proxy-core` = (project in file("proxy/core"))
     dockerSettings,
     fork in run := true,
     // In memory journal by default
-    javaOptions in run ++= Seq("-Dconfig.resource=dev-mode.conf"),
+    javaOptions in run ++= Seq("", "-Dconfig.resource=dev-mode.conf"),
     mainClass in assembly := Some("io.cloudstate.proxy.CloudStateProxyMain"),
     assemblyJarName in assembly := "akka-proxy.jar",
     test in assembly := {},
