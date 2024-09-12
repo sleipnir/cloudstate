@@ -41,7 +41,7 @@ object GraalVMPlugin extends AutoPlugin {
   import DockerPlugin.autoImport._
   import UniversalPlugin.autoImport._
 
-  private val GraalVMBaseImage = "oracle/graalvm-ce"
+  private val GraalVMBaseImage = "ghcr.io/graalvm/graalvm-ce"
   private val NativeImageCommand = "native-image"
 
   override def requires: Plugins = JavaAppPackaging && DockerPlugin
@@ -108,6 +108,10 @@ object GraalVMPlugin extends AutoPlugin {
             s"${(NativePackagerKeys.defaultLinuxInstallLocation in Docker).value}/${NativePackagerKeys.executableScriptName.value}"
           )
         } else oldEntryPoint
+      },
+      Docker / dockerGroupLayers := { // disable layers for native-image builds
+        val oldDockerGroupLayers = (Docker / dockerGroupLayers).value
+        if (graalVMDockerPublishLocalBuild.value) PartialFunction.empty else oldDockerGroupLayers
       },
       dockerCommands := {
         val oldCommands = dockerCommands.value

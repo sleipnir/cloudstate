@@ -1,0 +1,302 @@
+= Getting started
+
+This page describes how to setup a development environment for contributing to and developing Cloudstate itself. If you are after documentation on how to develop Cloudstate services, see xref:develop:index.adoc[Developing Cloudstate services].
+
+The Cloudstate Build uses `sbt` for building the Cloudstate proxy, and Go for building the Cloudstate operator.
+
+== Installation instructions
+
+* Install the `git` source code manager from https://git-scm.com/[https://git-scm.com/].
+* Clone the Cloudstate repository using `git`: `git clone git@github.com:cloudstateio/cloudstate.git`
+* Install `sbt`, follow https://www.scala-sbt.org/download.html[these instructions].
+* Install https://golang.org/doc/install[Go].
+* Install https://kubernetes-sigs.github.io/kustomize/installation/[Kustomize].
+* Install https://book.kubebuilder.io/quick-start.html[Kubebuilder].
+
+To build node.js related samples, you'll need `nvm` to install the corresponding node.js version by running command `nvm install` and `nvm use`, then run `npm install` to install required modules.
+
+== Getting started
+
+It is possible to run `sbt` either on a command-by-command basis by running `sbt <command> parameters`. It is also possible to run `sbt` in interactive mode by running `sbt`, then you can interact with the build interactively by typing in commands and having them executed by pressing RETURN.
+
+The following is a list of sbt commands and use-cases:
+
+[cols="a,a"]
+|===
+| Command        | Use-case
+
+| `projects`
+| Prints a list of all projects in the build
+
+| `project <NAME>`
+| Makes `<NAME>` the current project
+
+| `clean`
+| Deletes all generated files and compilation results for the current project and the projects it depends on
+
+| `compile`
+| Compiles all non-test sources for the current project and the projects it depends on
+
+| `test:compile`
+| Compiles all sources for the current project and the projects it depends on
+
+| `test`
+| Executes all "regular" tests for the current project and the projects it depends on
+
+| `it:test`
+| Executes all integration tests for the current project and the projects it depends on
+
+| `exit`
+| Exits the interactive mode of `sbt`
+
+|===
+
+For more documentation about `sbt`, see https://www.scala-sbt.org/1.x/docs/index.html[the `sbt` documentation].
+
+== Running Cloudstate in Minikube
+
+Cloudstate can be easily run in Minikube. If you wish to use Istio, be aware that it can be quite resource intensive, we recommend not using Istio in development unless you have specific requirements to test with Istio.
+
+=== Installing a local build of Cloudstate
+
+To install a local build of Cloudstate to Minikube, first setup your docker environment to use the Minikube Docker registry:
+
+[source,sh]
+----
+eval $(minikube docker-env)
+----
+
+Start sbt:
+
+[source,sh]
+----
+sbt
+----
+
+Now build one or more proxy images. Cloudstate has a different image for each database backend, and in most cases, is able to build either a native image, or an image that runs a regular JVM. It takes at least 5 minutes to compile the native images, so for most development purposes, we recommend using the regular JVM images. For example, to compile the core proxy image, run:
+
+[source,sh]
+----
+dockerBuildCore publishLocal
+----
+
+The following commands are available:
+
+* `dockerBuildCore`
+* `dockerBuildNativeCore`
+* `dockerBuildCassandra`
+* `dockerBuildNativeCassandra`
+* `dockerBuildPostgres`
+* `dockerBuildNativePostgres`
+* `dockerBuildAllNonNative`
+* `dockerBuildAllNative`
+
+To each of these, `publishLocal` can be passed which will build the image locally, while `publish` will build and then push the image. If you wish to configure the docker hub username to push to, pass `-Ddocker.username=my-username` to the sbt command. If you wish to configure the Docker registry to push to, pass `-Ddocker.registry=gcr.io` for example to publish to the Google Container Registry. However, for most Minikube based development, there should be no need to push the images anywhere.
+
+Now, before the operator can be installed, you need to install cert-manager into minikube:
+
+[source,sh]
+----
+kubectl apply --validate=false -f https://github.com/jetstack/cert-manager/releases/download/v0.16.1/cert-manager.yaml
+kubectl wait --for=condition=available --timeout=2m -n cert-manager deployment/cert-manager-webhook
+----
+
+Now to install the operator. If you wish to use the native proxy images run the following command:
+
+[source,sh]
+----
+make -C cloudstate-operator deploy-native
+----
+
+Otherwise run:
+
+[source,sh]
+----
+make -C cloudstate-operator deploy
+----
+
+If you wish to have more control over which proxy images get used, you can configure the config map for that:
+
+[source,sh]
+----
+kubectl edit -n cloudstate-system configmap cloudstate-config
+----
+
+After changing the config map, you'll need to restart the operator:
+
+[source,sh]
+----
+kubectl -n cloudstate-system rollout restart deploy/cloudstate-controller-manager
+----
+
+Once you have Cloudstate running, you will presumably want to deploy a stateful function to it. If your function needs a stateful store, then either install the necessary database along with a `StatefulStore` descriptor to point to it, or deploy an in memory store if you don't need to test any particular database:
+
+[source,yaml]
+----
+apiVersion: cloudstate.io/v1alpha1
+kind: StatefulStore
+metadata:
+  name: inmemory
+spec:
+  inMemory: true
+----
+
+Now you can deploy a function, for example, the shopping cart:
+
+[source,yaml]
+----
+apiVersion: cloudstate.io/v1alpha1
+kind: StatefulService
+metadata:
+  name: shopping-cart
+spec:
+  storeConfig:
+    statefulStore:
+      name: inmemory
+  containers:
+  - image: cloudstateio/samples-js-shopping-cart:latest
+    name: user-function
+----
+
+The Cloudstate operator will translate this to a Deployment for you. Alternatively, you can create a deployment manually, yourself, and annotate it with the Cloudstate annotations:
+
+[source,yaml]
+----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: shopping-cart
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: shopping-cart
+  template:
+    metadata:
+      labels:
+        app: shopping-cart
+      annotations:
+        cloudstate.io/enabled: true
+        cloudstate.io/stateful-store: inmemory
+    spec:
+      containers:
+      - image: cloudstateio/samples-js-shopping-cart:latest
+        name: user-function
+----
+
+When using the sidecar injection method, you will also need to deploy a role and role binding for your deployments service account to allow the proxy to use the Kubernetes API to discover and bootstrap pods in an Akka cluster:
+
+[source,yaml]
+----
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: pod-reader
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: read-pods
+subjects:
+- kind: ServiceAccount
+  name: default
+roleRef:
+  kind: Role
+  name: pod-reader
+  apiGroup: rbac.authorization.k8s.io
+----
+
+Now that you have a deployment, there are a few ways it can be accessed, one is to port forward into the pod, but perhaps the simpler way is to create a `NodePort` service for it, by running:
+
+[source,sh]
+----
+kubectl expose deployment shopping-cart --name shopping-cart-node-port --port=8013 --type=NodePort
+----
+
+Now, you can see the hostname/port to access it on by running:
+
+[source,sh]
+----
+$ minikube service shopping-cart-node-port --url
+http://192.168.39.186:32121
+----
+
+Using a tool like https://github.com/fullstorydev/grpcurl[`grpcurl`], you can now inspect the services on it:
+
+[source,sh]
+----
+$ ./grpcurl -plaintext 192.168.39.186:32121 describe
+com.example.shoppingcart.ShoppingCart is a service:
+service ShoppingCart {
+  rpc AddItem ( .com.example.shoppingcart.AddLineItem ) returns ( .google.protobuf.Empty ) {
+    option (.google.api.http) = { post:"/cart/{user_id}/items/add" body:"*" };
+  }
+  rpc GetCart ( .com.example.shoppingcart.GetShoppingCart ) returns ( .com.example.shoppingcart.Cart ) {
+    option (.google.api.http) = { get:"/carts/{user_id}" additional_bindings:<get:"/carts/{user_id}/items" response_body:"items"> };
+  }
+  rpc RemoveItem ( .com.example.shoppingcart.RemoveLineItem ) returns ( .google.protobuf.Empty ) {
+    option (.google.api.http) = { post:"/cart/{user_id}/items/{product_id}/remove" };
+  }
+}
+----
+
+For the shopping cart app, there is an Akka based client that can be used from a Scala REPL, here's an example session:
+
+[source,sh]
+----
+sbt:cloudstate> akka-client/console
+...
+scala> val client = new io.cloudstate.samples.ShoppingCartClient("192.168.39.186", 32121)
+Connecting to 192.168.39.186:32121
+client: io.cloudstate.samples.ShoppingCartClient = io.cloudstate.samples.ShoppingCartClient@2c11e42a
+
+scala> client.getCart("foo")
+res0: com.example.shoppingcart.shoppingcart.Cart = Cart(Vector())
+
+scala> client.addItem("foo", "item-id-1", "Eggs", 12)
+res1: com.google.protobuf.empty.Empty = Empty()
+
+scala> client.addItem("foo", "item-id-2", "Milk", 3)
+res2: com.google.protobuf.empty.Empty = Empty()
+
+scala> client.getCart("foo")
+res3: com.example.shoppingcart.shoppingcart.Cart = Cart(Vector(LineItem(item-id-1,Eggs,12), LineItem(item-id-2,Milk,3)))
+----
+
+=== Development loops for the proxy
+
+Once you've installed Cloudstate and got a user function running, the proxy can be iterated on by running the corresponding `dockerBuild*` command for the proxy backend you're using, for example, for the in memory proxy:
+
+[source,sh]
+----
+sbt:cloudstate> dockerBuildCore publishLocal
+----
+
+Now, after each time you make changes and rebuild the docker image, the simplest way to ensure your Cloudstate functions pick it up is to delete the pods for it and let the deployment recreate them, eg:
+
+[source,sh]
+----
+kubectl delete pods --all
+----
+
+=== Development loops for the operator
+
+The easiest way to iterate on the operator is to run it locally, from an IDE or from the command line, rather than deploying it to Minikube/Kubernetes. The only advantage to deploying to Kubernetes is that it will verify that the RBAC permissions that the operator has are correct. The Cloudstate operator uses Kubebuilder, and when it runs outside of a Kubernetes container, it will use the credentials configured for `kubectl`. In the case of using Minikube, this will be the default cluster admin account.
+
+To use a locally running operator, first shutdown the operator running in Kubernetes, by scaling its deployment down to zero:
+
+[source,sh]
+----
+kubectl scale -n cloudstate deployment/cloudstate-operator --replicas 0
+----
+
+Now run the operator locally:
+
+[source,sh]
+----
+make -C cloudstate-operator run
+----

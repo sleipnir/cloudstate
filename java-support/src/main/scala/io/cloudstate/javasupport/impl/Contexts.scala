@@ -38,12 +38,12 @@ private[impl] trait AbstractEffectContext extends EffectContext {
 
   override final def effect(effect: ServiceCall, synchronous: Boolean): Unit = {
     checkActive()
-    SideEffect(
-      serviceName = effect.ref().method().getService.getFullName,
-      commandName = effect.ref().method().getName,
-      payload = Some(ScalaPbAny.fromJavaProto(effect.message())),
-      synchronous = synchronous
-    ) :: effects
+    effects = SideEffect(
+        serviceName = effect.ref().method().getService.getFullName,
+        commandName = effect.ref().method().getName,
+        payload = Some(ScalaPbAny.fromJavaProto(effect.message())),
+        synchronous = synchronous
+      ) :: effects
   }
 
   final def sideEffects: List[SideEffect] = effects.reverse
@@ -84,9 +84,11 @@ private[impl] trait AbstractClientActionContext extends ClientActionContext {
 
   protected def logError(message: String): Unit = ()
 
-  final def createClientAction(reply: Optional[JavaPbAny], allowNoReply: Boolean): Option[ClientAction] =
+  final def createClientAction(reply: Optional[JavaPbAny],
+                               allowNoReply: Boolean,
+                               restartOnFailure: Boolean): Option[ClientAction] =
     error match {
-      case Some(msg) => Some(ClientAction(ClientAction.Action.Failure(Failure(commandId, msg))))
+      case Some(msg) => Some(ClientAction(ClientAction.Action.Failure(Failure(commandId, msg, restartOnFailure))))
       case None =>
         if (reply.isPresent) {
           if (forward.isDefined) {

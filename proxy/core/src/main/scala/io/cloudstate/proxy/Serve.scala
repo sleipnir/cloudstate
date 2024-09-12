@@ -16,7 +16,7 @@
 
 package io.cloudstate.proxy
 
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 import scala.concurrent.{ExecutionContext, Future}
 import scala.annotation.tailrec
 import akka.grpc.internal.{
@@ -28,7 +28,15 @@ import akka.grpc.internal.{
 }
 import akka.NotUsed
 import akka.grpc.{ProtobufSerializer, Trailers}
-import akka.http.scaladsl.model.{HttpEntity, HttpHeader, HttpRequest, HttpResponse, StatusCodes}
+import akka.http.scaladsl.model.{
+  ContentTypes,
+  HttpEntity,
+  HttpHeader,
+  HttpProtocols,
+  HttpRequest,
+  HttpResponse,
+  StatusCodes
+}
 import akka.http.scaladsl.model.Uri.Path
 import akka.actor.{ActorRef, ActorSystem}
 import akka.event.{Logging, LoggingAdapter}
@@ -46,7 +54,6 @@ import io.cloudstate.proxy.EntityDiscoveryManager.ServableEntity
 import io.cloudstate.proxy.entity.UserFunctionReply
 import io.cloudstate.proxy.protobuf.Types
 import io.grpc.{Status, StatusRuntimeException}
-import org.slf4j.{Logger, LoggerFactory}
 
 object Serve {
   private[this] final val fallback: Any => Any = _ => fallback
@@ -108,7 +115,7 @@ object Serve {
           case UserFunctionReply(Some(ClientAction(ClientAction.Action.Forward(_), _)), _, _) =>
             log.error("Cannot serialize forward reply, this should have been handled by the UserFunctionRouter")
             None
-          case UserFunctionReply(Some(ClientAction(ClientAction.Action.Failure(Failure(_, message, _)), _)), _, _) =>
+          case UserFunctionReply(Some(ClientAction(ClientAction.Action.Failure(Failure(_, message, _, _)), _)), _, _) =>
             log.error("User Function responded with a failure: {}", message)
             throw CommandException(message)
           case _ =>
@@ -117,13 +124,11 @@ object Serve {
         .collect(Function.unlift(identity))
 
       emitter match {
-        /*
         case Some(e) =>
           handler.mapAsync(4) {
             case Reply(Some(payload), metadata, _) =>
               e.emit(payload, method, metadata).map(_ => payload)
           }
-         */
         case _ => handler.map(_.payload.get)
       }
 
@@ -141,7 +146,6 @@ object Serve {
 
   def createRoute(entities: Seq[ServableEntity],
                   router: UserFunctionRouter,
-                  statsCollector: ActorRef,
                   entityDiscoveryClient: EntityDiscoveryClient,
                   fileDescriptors: Seq[FileDescriptor],
                   emitters: Map[String, Emitter])(
@@ -150,7 +154,7 @@ object Serve {
       ec: ExecutionContext
   ): PartialFunction[HttpRequest, Future[HttpResponse]] = {
     val log = Logging(sys.eventStream, Serve.getClass)
-    val grpcProxy = createGrpcApi(entities, router, statsCollector, entityDiscoveryClient, emitters)
+    val grpcProxy = createGrpcApi(entities, router, entityDiscoveryClient, emitters)
     val grpcHandler = Function.unlift { request: HttpRequest =>
       val asResponse = grpcProxy.andThen { futureResult =>
         Some(futureResult.map {
@@ -165,7 +169,7 @@ object Serve {
       HttpApi.serve(entities.map(_.serviceDescriptor -> grpcProxy).toList),
       handleNetworkProbe(),
       ServerReflectionHandler.partial(
-        ServerReflectionImpl(fileDescriptors, entities.map(_.serviceName).toList)
+        ServerReflectionImpl(fileDescriptors, entities.map(_.serviceName).sorted.toList)
       )
     )
 
@@ -200,9 +204,13 @@ object Serve {
       )
   }
 
+  private def isGrpcRequest(request: HttpRequest): Boolean =
+    (request.protocol == HttpProtocols.`HTTP/2.0`) &&
+    ((request.entity.contentType == ContentTypes.`application/grpc+proto`) ||
+    (request.entity.contentType.mediaType.value == "application/grpc"))
+
   private[this] final def createGrpcApi(entities: Seq[ServableEntity],
                                         router: UserFunctionRouter,
-                                        statsCollector: ActorRef,
                                         entityDiscoveryClient: EntityDiscoveryClient,
                                         emitters: Map[String, Emitter])(
       implicit sys: ActorSystem,
@@ -220,7 +228,7 @@ object Serve {
     }).toMap
 
     val routes: PartialFunction[HttpRequest, Future[(List[HttpHeader], Source[ProtobufAny, NotUsed])]] = {
-      case req: HttpRequest if rpcMethodSerializers.contains(req.uri.path) =>
+      case req: HttpRequest if isGrpcRequest(req) && rpcMethodSerializers.contains(req.uri.path) =>
         log.debug("Received gRPC request [{}]", req.uri.path)
 
         val handler = rpcMethodSerializers(req.uri.path)

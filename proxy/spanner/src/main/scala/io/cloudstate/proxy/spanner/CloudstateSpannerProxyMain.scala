@@ -50,15 +50,21 @@ object CloudstateSpannerProxyMain {
       val snapshotsTable = getString("snapshots-table")
       val operationAwaitDelay = getDuration("operation-await-delay").toScala
       val operationAwaitMaxDuration = getDuration("operation-await-max-duration").toScala
-      Config(projectId,
-             instanceId,
-             databaseId,
-             journalTable,
-             tagsTable,
-             deletionsTable,
-             snapshotsTable,
-             operationAwaitDelay,
-             operationAwaitMaxDuration)
+      val numberOfRetries = getInt("number-of-retries")
+      val retryDelay = getDuration("retry-delay").toScala
+      Config(
+        projectId,
+        instanceId,
+        databaseId,
+        journalTable,
+        tagsTable,
+        deletionsTable,
+        snapshotsTable,
+        operationAwaitDelay,
+        operationAwaitMaxDuration,
+        numberOfRetries,
+        retryDelay
+      )
     }
   }
 
@@ -70,14 +76,17 @@ object CloudstateSpannerProxyMain {
                           deletionsTable: String,
                           snapshotsTable: String,
                           operationAwaitDelay: FiniteDuration,
-                          operationAwaitMaxDuration: FiniteDuration)
+                          operationAwaitMaxDuration: FiniteDuration,
+                          numberOfRetries: Int,
+                          retryDelay: FiniteDuration)
 
   def main(args: Array[String]): Unit = {
     // Parse config early in order to fail fast
     val config = Config.fromTypesafeConfig()
+    start(config)(CloudStateProxyMain.start())
+  }
 
-    implicit val classicSystem: ClassicSystem = CloudStateProxyMain.start()
-
+  def start(config: Config)(implicit classicSystem: ClassicSystem): Unit = {
     val clientSettings =
       GrpcClientSettings
         .fromConfig("spanner-client")
@@ -97,15 +106,19 @@ object CloudstateSpannerProxyMain {
     import config._
     val databaseName = s"projects/$projectId/instances/$instanceId/databases/$databaseId"
     classicSystem.spawn(
-      SchemaCheck(databaseName,
-                  journalTable,
-                  tagsTable,
-                  deletionsTable,
-                  snapshotsTable,
-                  operationAwaitDelay,
-                  operationAwaitMaxDuration,
-                  adminClient,
-                  operationsClient),
+      SchemaCheck(
+        databaseName,
+        journalTable,
+        tagsTable,
+        deletionsTable,
+        snapshotsTable,
+        operationAwaitDelay,
+        operationAwaitMaxDuration,
+        adminClient,
+        operationsClient,
+        numberOfRetries,
+        retryDelay
+      ),
       "schema-check"
     )
   }

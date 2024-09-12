@@ -4,8 +4,12 @@ jdk:
   - openjdk11
 before_install:
   - sudo apt-get -qq -y install conntrack jq
+git:
+  # disable git clone depth for dynamic versions from tags
+  depth: false
 env:
   global:
+  - CACHE_NAME=cloudstate-cache-01
   # Docs deploy token; encrypted with: travis encrypt --pro -r cloudstateio/cloudstate DEPLOY_DOCS_TOKEN=<cloudstate-bot.github.token>
   - secure: "DCmB7Mq1Dl+/rDl46RVQplSoyC5nS1jkGf8OYoRG7lfc0fDj4ZPDSy6nEQX9BGUY0uJmmr77ojQWvnx0tHeXs6Ci4lHftJ7nmC1pttRmezbhjj5YRdYB7xfe1I2vT7qOhcv+qAHjAteXNxoLqqomp49ov2hzwsfesCbyKlJ3EtLyyWldUgOGad66VBgsVJjkXkarXngM1VEty/GINheSwNVaeF9aiX4eY/GksHKUNFn3N4vvubU9VlGHVjBAbPDXUp81L1rlkOHgSgKtehHy/FpcsHeStAoZMNNDCfnK0CKHCtKEJ8FhYKAwQR8WIEYU8cMjSYQVP0UQaC7mH//RwMECPEXZi8uB1mryIwfHu3l6AlIMh9tz9mgrZxSsX4Qba/v5IiM7hD4/IZCi83qCru1DPYBmd37LvUPWRB3m9tApxlDE+gspBFrqIc2u4524lLkWzu/gvsJam/VUDnrdmiJZblJi/XM+6FEo32o/aEiXi6l/cxDAu2kHJIO4MblSXvMu4hl69XTG/q9vc3rtkfVrzTtHJt2LWFNsHzN0odUH4FYmQz0bcqjBc6gI0elnM2gD+7EpxyAMNNBnAZ/oV7ktpfpmbc0/W7kw0t9f4kiYYR3ebO/efmuuIlFC1nJs2ouXVvuzP1GcMkq6lExpD4Fqulf1RXmDHcruj3Cr5a4="
   # DockerHub password for cloudstatebot
@@ -20,6 +24,8 @@ env:
   - secure: "1+YZiGEGRfCcFqYqwJPwFk1TI15weQHbBxP9elnQa5gsc4a+YpdoyOA9y30BcoUPiB0xNpLwG449k5xUVKmpaNjU4iRlfvIGKF6tSEwuQ1BKyihNXgh9Iin+500BprRF7jXXaf96cJv45lEQRDv9Obsygtsv6VU0wbt/Ixc93PTf/Kk2DEetDxQuMN3abIC+tpFw5vtdIyE4UqC0FbmW/9MEO35Vdd9doxO5YCOvs3rDxw6GKs3x3Am88UD8FLhI6UnjGkSsii0rmXniNG18im5Gtyqr2vZXDrVaWYAf9dJd7j2TUJ0muVJZOhLlNc9RUP2dWs9zU0s0YAlxg6F8sdp4BEB1YpgWCWImRjgPjMTDS4FwcI5cjJ2FOOlU03VoeWxNhKKAK5kDTQ9+A+NA/a8sauBa5X4pituiXsuXb0aXC98EaL7UowtJu3UlKCIh7sbyFqItJbLGUxLB25TdOH146A5NMsc/ftXhutp4JV02ozy81oBI+o6Mv287vXqVdKWSATkwGdZmN01Lm+IITc3t6U7ZtiBXCL6iF3slPcAaI/Rj1Air4tAh252Nzi2uLpsj8Hyk9sPiDPPIhS3p6ccaPCYYI2+MuJ5acxd/gjqYQL18q54vJxjrfkJiLzQgFmaDAd84n1fNJ15rdb/Thh80l5pNt8WtMwrPuiTmKKM="
   # Github release token; encrypted with: travis encrypt --pro -r cloudstateio/cloudstate GITHUB_TOKEN=<cloudstate-bot.github.token>
   - secure: "CO7MKtUWdsXRv0g798GZxa79vb4SwhD5+g9DlHPNLfMfXq17P34Ukdiz6vx04GjuIWA5s82ZTHXUkq/gr5CheS5SwTaji5D4Uy1IApYStCallHoXEuI+W6nXSe0fEnSyW9EfGyLou+4VM/pbuWH9FvEg+Lvci/nLiQq9g1I9aDFCxYYfr8ka+XxTOESb6Z9XHqoXpiNufgyQRYTPgvM5ImE0bdY21xSDR3IqsgtZZ40AQRgVyrZNIxNGPqkhVtGoSshquF/yXdk6A5Kuaw2m5HP7v9ohWnr8PGe6Y4t0X2cjTyowHnj0yqwD09xp/zBlMcWkoLY0ujNm7yooalTGCwySdKuB6QgLxZpXDshGHkVn+Z/pHW0//NrfsQpQcLEiG1XQ/8MlKTF1e1CuItGjO4WFDjOrQBvEQLxMhQXQY2po8VRUsZxRwBCf+A67PAkyI3cX1foH/JKa/plFxdNDEdmTZJUqk7huKrq9JQVUseH1zNSYX+HwDOAaugkwGIfm4YB+AIkWALUpka8fugc3FgVfLYAuLN6QYgMSi/vpqt6CBFrkTtZyuTr+seX8mqSPBrrlbjuQ8sInrHZgXVUXRNeDX8Sb2zk877Bn8CWw89XPred/SpJQ9Mvb0ke/Mu4kJ048wexjT2ken3gq6TYuCU3qcqScGhB13onTlQWAoqQ="
+  # NPM automation token; encrypted with: travis encrypt --pro -r cloudstateio/cloudstate NPM_TOKEN=<cloudstatebot.automation.token>
+  - secure: "uAqPWHAyVe9uUHTddHUjzoSnKc+1Da2x6M43uog9uHFFLgYbSP644vmxk0jPbx0A8elVApZ9Y3H32XmW4smCqyK67D/f16oCtb/N5paMDzCEzSvWih+E3Qvm8uEghVAkVjvJHZncCEuaAJ/68yuTPpcWyG3RucaSaXfxJ07SfjUJTeY2u0ltRHXQs2uMslgFPMjV1YpLBQThDBlTSsHrdfDjgJ5CLROMHYLlI4o/0wRfs/Yx61E92b0H8vORsMqK5NKU8WCNICtJIxwioqS8BzBR6PSP1dvEanSYYNJurh8opQN1oDhUxzX60okXB29Bvtmpq8n7rzUsmVzKrhOBQP6Y2l9fKoKv/xQBLiMnjZsr/wWkaFK9CJFqR9zqWmgp5MaOIZDnAqLEO+2RVyDfe8bXj0TVUW/ReFAU4owTkuXmswqOFY0R9ll/CTPHpQ7yysF+29vINsyYDg3hKFCZUu+6EHstr5sPGhcXdU68R5mhgkgdH7e1LUUAfbAzZgsygj6tLsXsD73kwSAlFDfzORpwp3udZkI1E7Ec5jIveCuRP0QN2nWsiLypBqWGpN9PBVdesFDvv4vKejnMggBMIiRongpKvSoK0t8hpNlhQMYRepMaVJoeVRKDcCwIjrIAosP0/8/8FYa/+yzPV/D4FnCGXauaQf0/g4fg2SidXRw="
 services:
   - docker
 jobs:
@@ -33,9 +39,11 @@ jobs:
     before_script:
     - cd node-support && nvm install && nvm use && npm install && cd -
     - cd samples/js-shopping-cart && nvm install && nvm use && npm install && cd -
+    - cd node-support/docs/src/modules/javascript/examples && nvm install && nvm use && npm install && cd -
     script:
     - cd node-support && npm test && cd -
     - cd samples/js-shopping-cart && npm test && cd -
+    - cd node-support/docs/src/modules/javascript/examples && npm test && cd -
 
   - name: sbt tests
     before_script:
@@ -47,60 +55,22 @@ jobs:
     after_script:
       - docker stop googlepubsub
 
-  - name: docs tests
+  - name: docs validation
     before_script:
-    - cd node-support && nvm install && nvm use && npm install && cd -
-    - cd docs/src/test/js && nvm install && nvm use && npm install && cd -
+    - cd node-support && nvm install && nvm use && cd -
     script:
-    - sbt 'set concurrentRestrictions in Global += Tags.limitAll(1)' docs/paradox docs/test
-    - cd docs/src/test/js && npm test && cd -
+    - make -C docs
+    - make -C java-support/docs
+    - make -C node-support/docs
 
   - stage: Integration tests
     name: TCK
     before_script:
     - sbt update
     - cd node-support && nvm install && nvm use && npm install && cd -
-    - cd samples/js-shopping-cart && nvm install && nvm use && npm install && cd -
+    - cd node-support/tck && nvm install && nvm use && npm install && cd -
     script:
     - sbt 'set concurrentRestrictions in Global += Tags.limitAll(1)' tck/it:test
-
-  - name: Minikube smoke test (in-memory store)
-    before_script:
-    - bin/prepare-minikube-linux.sh
-    script:
-    - set -e
-    - bin/deploy-cloudstate.sh
-    - bin/run-java-shopping-cart-test.sh
-
-  - name: Minikube smoke test (postgres store)
-    before_script:
-    - bin/prepare-minikube-linux.sh
-    script:
-    - set -e
-    - bin/install-postgres.sh
-    - bin/deploy-cloudstate.sh postgres
-    - bin/run-java-shopping-cart-test.sh postgres
-
-  - name: Minikube smoke test (cassandra store)
-    before_script:
-    - bin/prepare-minikube-linux.sh
-    script:
-    - set -e
-    - bin/install-cassandra.sh
-    - bin/deploy-cloudstate.sh cassandra
-    - bin/run-java-shopping-cart-test.sh cassandra
-
-  - stage: Deploy
-    name: Deploy documentation to cloudstate.io
-    if: tag =~ ^v
-    before_script: cd node-support && nvm install && nvm use && npm install && cd -
-    script: sbt docs/deploy
-
-  - stage: Deploy
-    name: Deploy snapshot documentation to cloudstate.io
-    if: branch = master AND type = push
-    before_script: cd node-support && nvm install && nvm use && npm install && cd -
-    script: sbt docs/deploy
 
   - stage: Deploy
     name: Publish release
@@ -110,7 +80,9 @@ jobs:
     - sbt "set concurrentRestrictions in Global += Tags.limitAll(1)" "dockerBuildAllNonNative publish" operator/docker:publish tck/docker:publish
     - sbt proxy/publish proxy/bintrayRelease proxy/bintraySyncMavenCentral
     - sbt -Duse.native.builds=false operator/compileK8sDescriptors
+    - sbt protocols/package
     - travis/upload-release-assets.sh
+    - make -C docs deploy
 
   - stage: Deploy
     name: Publish latest builds
@@ -119,23 +91,38 @@ jobs:
     - echo "$DOCKER_PASSWORD" | docker login -u cloudstatebot --password-stdin
     - sbt -Duse.native.builds=false -Ddocker.tag=latest "set concurrentRestrictions in Global += Tags.limitAll(1)" "dockerBuildAllNonNative publish" operator/docker:publish tck/docker:publish
     - cd .devcontainer && ./build.sh push && cd -
+    - sbt java-support-tck/docker:publish
 
   - stage: Deploy
     name: Publish Java Support release
     if: tag =~ ^java-support-
-    script: sbt java-support/publish java-support/bintrayRelease java-support/bintraySyncMavenCentral
+    script:
+    - sbt java-support/publish java-support/bintrayRelease java-support/bintraySyncMavenCentral
+    - make -C java-support/docs deploy
+    - echo "$DOCKER_PASSWORD" | docker login -u cloudstatebot --password-stdin
+    - sbt java-support-tck/docker:publish
+
+  - stage: Deploy
+    name: Publish Node Support release
+    if: tag =~ ^node-support-
+    before_script:
+    - echo "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" >> node-support/.npmrc
+    - cd node-support && nvm install && npm install && cd -
+    script:
+    - cd node-support && npm publish && cd -
+    - make -C node-support/docs deploy
 
 cache:
   directories:
   - "$HOME/.ivy2/cache"
   - "$HOME/.sbt"
   - "$HOME/.npm"
-  - "$HOME/.coursier"
+  - "$HOME/.cache/coursier"
 before_cache:
   - du -h -d 1 $HOME/.ivy2/
   - du -h -d 2 $HOME/.sbt/
-  - du -h -d 4 $HOME/.coursier/
+  - du -h -d 4 $HOME/.cache/coursier/
   - rm -fv $HOME/.ivy2/.sbt.ivy.lock
-  - find $HOME/.ivy2/cache -name "ivydata-*.properties" -print -delete
-  - find $HOME/.sbt        -name "*.lock"               -print -delete
-  - find $HOME/.coursier   -name "*.lock"               -print -delete
+  - find $HOME/.ivy2/cache     -name "ivydata-*.properties" -print -delete
+  - find $HOME/.sbt            -name "*.lock"               -print -delete
+  - find $HOME/.cache/coursier -name "*.lock"               -print -delete

@@ -23,15 +23,17 @@ import akka.NotUsed
 import akka.actor.ActorSystem
 import akka.stream.scaladsl.{Flow, Source}
 import com.google.protobuf.Descriptors
-import io.cloudstate.javasupport.{Context, ServiceCallFactory, StatefulService}
+import io.cloudstate.javasupport.{Context, Metadata, Service, ServiceCallFactory}
 import io.cloudstate.javasupport.crdt.{
   CommandContext,
   CrdtContext,
   CrdtCreationContext,
   CrdtEntityFactory,
+  CrdtEntityOptions,
   StreamCancelledContext,
   StreamedCommandContext,
-  SubscriptionContext
+  SubscriptionContext,
+  WriteConsistency
 }
 import io.cloudstate.javasupport.impl.{
   AbstractClientActionContext,
@@ -39,6 +41,7 @@ import io.cloudstate.javasupport.impl.{
   ActivatableContext,
   AnySupport,
   FailInvoked,
+  MetadataImpl,
   ResolvedEntityFactory,
   ResolvedServiceMethod
 }
@@ -48,13 +51,19 @@ import io.cloudstate.protocol.entity.{Command, Failure, StreamCancelled}
 import com.google.protobuf.any.{Any => ScalaPbAny}
 import com.google.protobuf.{Any => JavaPbAny}
 
-import scala.compat.java8.OptionConverters._
-import scala.collection.JavaConverters._
+import scala.jdk.CollectionConverters._
 
 final class CrdtStatefulService(val factory: CrdtEntityFactory,
                                 override val descriptor: Descriptors.ServiceDescriptor,
-                                val anySupport: AnySupport)
-    extends StatefulService {
+                                val anySupport: AnySupport,
+                                override val entityOptions: Option[CrdtEntityOptions])
+    extends Service {
+
+  def this(factory: CrdtEntityFactory,
+           descriptor: Descriptors.ServiceDescriptor,
+           anySupport: AnySupport,
+           entityOptions: CrdtEntityOptions) = this(factory, descriptor, anySupport, Some(entityOptions))
+
   override final val entityType = Crdt.name
 
   override def resolvedMethods: Option[Map[String, ResolvedServiceMethod[_, _]]] =
@@ -96,8 +105,8 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
     val service =
       services.getOrElse(init.serviceName, throw new RuntimeException(s"Service not found: ${init.serviceName}"))
 
-    val runner = new EntityRunner(service, init.entityId, init.state.map { state =>
-      CrdtStateTransformer.create(state, service.anySupport)
+    val runner = new EntityRunner(service, init.entityId, init.delta.map { delta =>
+      CrdtDeltaTransformer.create(delta, service.anySupport)
     })
 
     Flow[CrdtStreamIn]
@@ -105,15 +114,11 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
         in.message match {
           case In.Command(command) =>
             runner.handleCommand(command)
-          case In.Changed(delta) =>
+          case In.Delta(delta) =>
             runner.handleDelta(delta).map { msg =>
               CrdtStreamOut(CrdtStreamOut.Message.StreamedMessage(msg))
             }
-          case In.State(state) =>
-            runner.handleState(state).map { msg =>
-              CrdtStreamOut(CrdtStreamOut.Message.StreamedMessage(msg))
-            }
-          case In.Deleted(_) =>
+          case In.Delete(_) =>
             // ???
             Nil
           case In.StreamCancelled(cancelled) =>
@@ -133,9 +138,8 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
 
   private class EntityRunner(service: CrdtStatefulService, entityId: String, private var crdt: Option[InternalCrdt]) {
 
-    private var crdtIsNew = false
     private var subscribers = Map.empty[Long, function.Function[SubscriptionContext, Optional[JavaPbAny]]]
-    private var cancelListeners = Map.empty[Long, function.Consumer[StreamCancelledContext]]
+    private var cancelListeners = Map.empty[Long, (function.Consumer[StreamCancelledContext], Metadata)]
     private val entity = {
       val ctx = new CrdtCreationContext with CapturingCrdtFactory with ActivatableContext
       try {
@@ -144,22 +148,16 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
         ctx.deactivate()
       }
     }
-    verifyNoDelta("creation")
+    // Doesn't make sense to verify that there's no delta here.
+    // LWWRegister can have its value set on creation, so there may be a delta.
+    // verifyNoDelta("creation")
 
     private def verifyNoDelta(scope: String): Unit =
       crdt match {
-        case Some(changed) if changed.hasDelta && !crdtIsNew =>
+        case Some(changed) if changed.hasDelta =>
           throw new RuntimeException(s"CRDT was changed during $scope, this is not allowed.")
         case _ =>
       }
-
-    def handleState(state: CrdtState): List[CrdtStreamedMessage] = {
-      crdt match {
-        case Some(existing) => existing.applyState(state.state)
-        case None => CrdtStateTransformer.create(state, service.anySupport)
-      }
-      notifySubscribers()
-    }
 
     def handleDelta(delta: CrdtDelta): List[CrdtStreamedMessage] = {
       crdt match {
@@ -199,7 +197,7 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
         ctx.deactivate()
       }
 
-      val clientAction = ctx.createClientAction(reply, allowNoReply = true)
+      val clientAction = ctx.createClientAction(reply, allowNoReply = true, restartOnFailure = false)
 
       if (ctx.hasError) {
         verifyNoDelta("failed command handling")
@@ -241,9 +239,9 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
     def handleStreamCancelled(cancelled: StreamCancelled): List[CrdtStreamOut] = {
       subscribers -= cancelled.id
       cancelListeners.get(cancelled.id) match {
-        case Some(onCancel) =>
+        case Some((onCancel, metadata)) =>
           cancelListeners -= cancelled.id
-          val ctx = new CrdtStreamCancelledContext(cancelled)
+          val ctx = new CrdtStreamCancelledContext(cancelled, metadata)
           try {
             onCancel.accept(ctx)
           } finally {
@@ -292,7 +290,7 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
               context.deactivate()
             }
 
-            val clientAction = context.createClientAction(reply, allowNoReply = true)
+            val clientAction = context.createClientAction(reply, allowNoReply = true, restartOnFailure = false)
 
             if (context.hasError) {
               subscribers -= id
@@ -345,7 +343,7 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
           subscribers = subscribers.updated(command.id, onChange)
         }
         cancelCallback.foreach { onCancel =>
-          cancelListeners = cancelListeners.updated(command.id, onCancel)
+          cancelListeners = cancelListeners.updated(command.id, (onCancel, metadata))
         }
         changeCallback.isDefined || cancelCallback.isDefined
       }
@@ -363,9 +361,12 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
       override final def commandId: Long = command.id
 
       override final def commandName(): String = command.name
+
+      override val metadata: Metadata = new MetadataImpl(command.metadata.map(_.entries.toVector).getOrElse(Nil))
+
     }
 
-    class CrdtStreamCancelledContext(cancelled: StreamCancelled)
+    class CrdtStreamCancelledContext(cancelled: StreamCancelled, override val metadata: Metadata)
         extends StreamCancelledContext
         with CapturingCrdtFactory
         with AbstractEffectContext
@@ -409,6 +410,19 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
       override final def entityId(): String = EntityRunner.this.entityId
 
       override def serviceCallFactory(): ServiceCallFactory = rootContext.serviceCallFactory()
+
+      private var writeConsistency = WriteConsistency.LOCAL
+
+      override final def getWriteConsistency: WriteConsistency = writeConsistency
+
+      override final def setWriteConsistency(writeConsistency: WriteConsistency): Unit =
+        this.writeConsistency = writeConsistency
+
+      def crdtWriteConsistency: CrdtWriteConsistency = writeConsistency match {
+        case WriteConsistency.LOCAL => CrdtWriteConsistency.LOCAL
+        case WriteConsistency.MAJORITY => CrdtWriteConsistency.MAJORITY
+        case WriteConsistency.ALL => CrdtWriteConsistency.ALL
+      }
     }
 
     trait CapturingCrdtFactory extends AbstractCrdtFactory with AbstractCrdtContext {
@@ -424,7 +438,6 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
           throw new RuntimeException("This entity already has a CRDT created for it!")
         }
         crdt = Some(newCrdt)
-        crdtIsNew = true
         newCrdt
       }
 
@@ -440,29 +453,12 @@ class CrdtImpl(system: ActorSystem, services: Map[String, CrdtStatefulService], 
 
       final def createCrdtAction(): Option[CrdtStateAction] = crdt match {
         case Some(c) =>
-          if (crdtIsNew) {
-            if (c.hasDelta) {
-              crdtIsNew = false
-              if (deleted) {
-                crdt = None
-                None
-              } else {
-                c.resetDelta()
-                Some(CrdtStateAction(action = CrdtStateAction.Action.Create(CrdtState(c.state))))
-              }
-            } else if (deleted) {
-              crdtIsNew = false
-              crdt = None
-              None
-            } else {
-              None
-            }
-          } else if (deleted) {
-            Some(CrdtStateAction(action = CrdtStateAction.Action.Delete(CrdtDelete())))
+          if (deleted) {
+            Some(CrdtStateAction(action = CrdtStateAction.Action.Delete(CrdtDelete()), crdtWriteConsistency))
           } else if (c.hasDelta) {
-            val delta = c.delta.get
+            val delta = c.delta
             c.resetDelta()
-            Some(CrdtStateAction(action = CrdtStateAction.Action.Update(CrdtDelta(delta))))
+            Some(CrdtStateAction(action = CrdtStateAction.Action.Update(CrdtDelta(delta)), crdtWriteConsistency))
           } else {
             None
           }

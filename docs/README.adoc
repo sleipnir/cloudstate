@@ -1,0 +1,19 @@
+= Cloudstate documentation
+
+Build the docs using the Makefile:
+
+....
+make build
+....
+
+Open the docs index page:
+
+....
+open build/site/index.html
+....
+
+Or build in author mode:
+
+....
+make build-author-mode
+....

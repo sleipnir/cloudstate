@@ -23,22 +23,22 @@ import akka.cluster.sharding.{ClusterSharding, ClusterShardingSettings}
 import akka.event.Logging
 import akka.grpc.GrpcClientSettings
 import akka.stream.Materializer
-import akka.stream.scaladsl.{Flow, Source}
+import akka.stream.scaladsl.Flow
 import akka.util.Timeout
 import com.google.protobuf.Descriptors.ServiceDescriptor
 import io.cloudstate.protocol.entity.{Entity, Metadata}
 import io.cloudstate.protocol.event_sourced.EventSourcedClient
 import io.cloudstate.proxy._
 import io.cloudstate.proxy.entity.{EntityCommand, UserFunctionReply}
+import io.cloudstate.proxy.sharding.DynamicLeastShardAllocationStrategy
 
 import scala.concurrent.{ExecutionContext, Future}
-import scala.collection.JavaConverters._
 
-class EventSourcedSupportFactory(system: ActorSystem,
-                                 config: EntityDiscoveryManager.Configuration,
-                                 grpcClientSettings: GrpcClientSettings,
-                                 concurrencyEnforcer: ActorRef,
-                                 statsCollector: ActorRef)(implicit ec: ExecutionContext, mat: Materializer)
+class EventSourcedSupportFactory(
+    system: ActorSystem,
+    config: EntityDiscoveryManager.Configuration,
+    grpcClientSettings: GrpcClientSettings
+)(implicit ec: ExecutionContext, mat: Materializer)
     extends EntityTypeSupportFactory {
 
   private final val log = Logging.getLogger(system, this.getClass)
@@ -50,18 +50,20 @@ class EventSourcedSupportFactory(system: ActorSystem,
                                       methodDescriptors: Map[String, EntityMethodDescriptor]): EntityTypeSupport = {
     validate(serviceDescriptor, methodDescriptors)
 
-    val stateManagerConfig = EventSourcedEntity.Configuration(entity.serviceName,
-                                                              entity.persistenceId,
-                                                              config.passivationTimeout,
-                                                              config.relayOutputBufferSize)
+    val eventSourcedEntityConfig = EventSourcedEntity.Configuration(
+      entity.serviceName,
+      entity.persistenceId,
+      EntityTypeSupportFactory.configuredPassivationTimeoutOrElse(entity,
+                                                                  config.eventSourcedSettings.passivationTimeout),
+      config.relayOutputBufferSize
+    )
 
     log.debug("Starting EventSourcedEntity for {}", entity.persistenceId)
     val clusterSharding = ClusterSharding(system)
     val clusterShardingSettings = ClusterShardingSettings(system)
     val eventSourcedEntity = clusterSharding.start(
       typeName = entity.persistenceId,
-      entityProps =
-        EventSourcedEntitySupervisor.props(eventSourcedClient, stateManagerConfig, concurrencyEnforcer, statsCollector),
+      entityProps = EventSourcedEntitySupervisor.props(eventSourcedClient, eventSourcedEntityConfig),
       settings = clusterShardingSettings,
       messageExtractor = new EntityIdExtractor(config.numberOfShards),
       allocationStrategy = new DynamicLeastShardAllocationStrategy(1, 10, 2, 0.0),
@@ -84,9 +86,9 @@ class EventSourcedSupportFactory(system: ActorSystem,
     val methodsWithoutKeys = methodDescriptors.values.filter(_.keyFieldsCount < 1)
     if (methodsWithoutKeys.nonEmpty) {
       val offendingMethods = methodsWithoutKeys.map(_.method.getName).mkString(",")
-      throw new EntityDiscoveryException(
+      throw EntityDiscoveryException(
         s"Event sourced entities do not support methods whose parameters do not have at least one field marked as entity_key, " +
-        "but ${serviceDescriptor.getFullName} has the following methods without keys: ${offendingMethods}"
+        s"but ${serviceDescriptor.getFullName} has the following methods without keys: $offendingMethods"
       )
     }
   }

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Run the Java shopping cart sample as a test, with a given persistence store.
+# Run the Java value-based Entity shopping cart sample as a test, with a given persistence store.
 #
-# run-java-shopping-cart-test.sh [inmemory|postgres|cassandra]
+# run-java-shopping-cart-test.sh [inmemory|postgres]
 
 set -e
 
@@ -27,7 +27,7 @@ done
 set -- "${residual[@]}"
 store="$1"
 
-# Build the java shopping cart
+# Build the java value-based entity shopping cart
 if [ "$build" == true ] ; then
   echo
   echo "Building java-shopping-cart ..."
@@ -40,76 +40,39 @@ statefulservice="shopping-cart-$statefulstore"
 
 case "$store" in
 
-  postgres ) # deploy the shopping-cart with postgres store
+  postgres ) # deploy the value-based entity-shopping-cart with postgres store
 
   statefulstore="postgres"
   statefulservice="shopping-cart-$statefulstore"
 
-  [ -f postgres-env.sh ] && source postgres-env.sh
-
   kubectl apply -f - <<YAML
 apiVersion: cloudstate.io/v1alpha1
 kind: StatefulStore
 metadata:
   name: $statefulstore
 spec:
-  type: Postgres
-  deployment: Unmanaged
-  config:
-    service: $POSTGRES_SERVICE
+  postgres:
+    host: postgres-postgresql.default.svc.cluster.local
     credentials:
-      database: $POSTGRES_DATABASE
-      username: $POSTGRES_USERNAME
-      password: $POSTGRES_PASSWORD
+      secret:
+        name: postgres-credentials
 ---
 apiVersion: cloudstate.io/v1alpha1
 kind: StatefulService
 metadata:
   name: $statefulservice
 spec:
-  datastore:
-    name: $statefulstore
+  storeConfig:
+    statefulStore:
+      name: $statefulstore
   containers:
-    - image: cloudstatedev/java-shopping-cart:dev
+    - image: cloudstateio/java-shopping-cart:latest
+      imagePullPolicy: Never
+      name: user-function
 YAML
 ;;
 
-  cassandra ) # deploy the shopping-cart with cassandra store
-
-  statefulstore="cassandra"
-  statefulservice="shopping-cart-$statefulstore"
-
-  [ -f cassandra-env.sh ] && source cassandra-env.sh
-
-  kubectl apply -f - <<YAML
-apiVersion: cloudstate.io/v1alpha1
-kind: StatefulStore
-metadata:
-  name: $statefulstore
-spec:
-  type: Cassandra
-  deployment: Unmanaged
-  config:
-    service: $CASSANDRA_SERVICE
-    credentials:
-      username: $CASSANDRA_USERNAME
-      password: $CASSANDRA_PASSWORD
----
-apiVersion: cloudstate.io/v1alpha1
-kind: StatefulService
-metadata:
-  name: $statefulservice
-spec:
-  datastore:
-    name: $statefulstore
-    config:
-      keyspace: shoppingcart
-  containers:
-    - image: cloudstatedev/java-shopping-cart:dev
-YAML
-;;
-
-  inmemory | * ) # deploy the shopping-cart with in-memory store
+  inmemory | * ) # deploy the value-based entity-shopping-cart with in-memory store
 
   statefulstore="inmemory"
   statefulservice="shopping-cart-$statefulstore"
@@ -120,23 +83,26 @@ kind: StatefulStore
 metadata:
   name: $statefulstore
 spec:
-  type: InMemory
+  inMemory: true
 ---
 apiVersion: cloudstate.io/v1alpha1
 kind: StatefulService
 metadata:
   name: $statefulservice
 spec:
-  datastore:
-    name: $statefulstore
+  storeConfig:
+    statefulStore:
+      name: $statefulstore
   containers:
-    - image: cloudstatedev/java-shopping-cart:dev
+    - image: cloudstateio/java-shopping-cart:latest
+      imagePullPolicy: Never
+      name: user-function
 YAML
 ;;
 
 esac
 
-deployment="$statefulservice-deployment"
+deployment="$statefulservice"
 
 # Can only kubectl wait when the resource already exists
 echo
@@ -149,10 +115,11 @@ done
 kubectl get deployment $deployment
 
 function fail_with_details {
+  echo "Failed:" "$@"
   echo
   echo "=== Operator logs ==="
   echo
-  kubectl logs -l app=cloudstate-operator -n cloudstate --tail=-1
+  kubectl logs -l control-plane=controller-manager -n cloudstate-system -c manager --tail=-1
   echo
   echo "=== Deployment description ==="
   echo
@@ -164,38 +131,39 @@ function fail_with_details {
   echo
   echo "=== Proxy logs ==="
   echo
-  kubectl logs -l app=$statefulservice -c akka-sidecar --tail=-1
+  kubectl logs -l cloudstate.io/stateful-service=$statefulservice -c cloudstate-sidecar --tail=-1
   echo
-  echo "=== User container logs ==="
+  echo "=== User function logs ==="
   echo
-  kubectl logs -l app=$statefulservice -c user-container --tail=-1
+  kubectl logs -l cloudstate.io/stateful-service=$statefulservice -c user-function --tail=-1
   exit 1
 }
 
 # Wait for the deployment to be available
 echo
 echo "Waiting for deployment to be ready..."
-kubectl wait --for=condition=available --timeout=1m deployment/$deployment || fail_with_details
+kubectl rollout status --timeout=5m deployment/$deployment || fail_with_details
 kubectl get deployment $deployment
 
 # Scale up the deployment, to test with akka clustering
-# Travis can fail with 3 nodes, only scale to 2
 echo
 echo "Scaling deployment..."
-kubectl scale --replicas=2 deployment/$deployment
+kubectl scale --replicas=3 statefulservice/$statefulservice
 kubectl get deployment $deployment
 
 # Wait for the scaled deployment to be available
 echo
 echo "Waiting for deployment to be ready..."
-kubectl wait --for=condition=available --timeout=5m deployment/$deployment || fail_with_details
+kubectl rollout status --timeout=5m deployment/$deployment || fail_with_details
 kubectl get deployment $deployment
+[ $(kubectl get deployment $deployment -o "jsonpath={.status.availableReplicas}") -eq 3 ] || fail_with_details "Expected 3 available replicas"
 
-# Expose the shopping-cart service
-kubectl expose deployment $deployment --port=8013 --type=NodePort
+# Expose the value-based entity-shopping-cart service
+nodeport="$deployment-node-port"
+kubectl expose deployment $deployment --name=$nodeport --port=8013 --type=NodePort
 
-# Get the URL for the shopping-cart service
-url=$(minikube service $deployment --url)
+# Get the URL for the value-based entity-shopping-cart service
+url=$(minikube service $nodeport --url)
 
 # Now we use the REST interface to test it (because it's easier to use curl than a grpc
 # command line client)
@@ -207,9 +175,14 @@ non_empty_cart='{"items":[{"productId":"foo","name":"A foo","quantity":10}]}'
 for i in {1..9} ; do
   cart_id="test$i"
   echo
-  echo "Testing shopping cart $cart_id ..."
+  echo "Testing value-based entity shopping cart $cart_id ..."
 
-  initial_cart=$(curl -s $url/carts/$cart_id)
+  initial_cart=''
+  for attempt in {1..5} ; do
+    initial_cart=$(curl -s $url/ve/carts/$cart_id || echo '')
+    [ -n "$initial_cart" ] && break || sleep 1
+  done
+
   if [[ "$empty_cart" != "$initial_cart" ]]
   then
       echo "Expected '$empty_cart'"
@@ -219,16 +192,28 @@ for i in {1..9} ; do
       echo "Initial request for $cart_id succeeded."
   fi
 
-  curl -s -X POST $url/cart/$cart_id/items/add -H "Content-Type: application/json" -d "$post" > /dev/null
+  curl -s -X POST $url/ve/cart/$cart_id/items/add -H "Content-Type: application/json" -d "$post" > /dev/null
 
-  new_cart=$(curl -s $url/carts/$cart_id)
+  new_cart=$(curl -s $url/ve/carts/$cart_id)
   if [[ "$non_empty_cart" != "$new_cart" ]]
   then
       echo "Expected '$non_empty_cart'"
       echo "But got '$new_cart'"
       fail_with_details
   else
-      echo "Shopping cart update for $cart_id succeeded."
+      echo "Value-based Entity shopping cart update for $cart_id succeeded."
+  fi
+
+  curl -s -X POST $url/ve/carts/$cart_id/remove -H "Content-Type: application/json" -d '{"userId": "'"$cart_id"'"}' > /dev/null
+
+  deleted_cart=$(curl -s $url/ve/carts/$cart_id)
+  if [[ "$empty_cart" != "$deleted_cart" ]]
+  then
+      echo "Expected '$empty_cart'"
+      echo "But got '$deleted_cart'"
+      fail_with_details
+  else
+      echo "Value-based Entity shopping cart delete for $cart_id succeeded."
   fi
 done
 
@@ -237,14 +222,15 @@ if [ "$logs" == true ] ; then
   echo
   echo "=== Proxy logs ==="
   echo
-  kubectl logs -l app=$statefulservice -c akka-sidecar --tail=-1
+  kubectl logs -l cloudstate.io/stateful-service=$statefulservice -c cloudstate-sidecar --tail=-1
 fi
 
-# Delete shopping-cart
+# Delete value-based entity-shopping-cart
 if [ "$delete" == true ] ; then
   echo
   echo "Deleting $statefulservice ..."
   kubectl delete service $deployment
+  kubectl delete service $nodeport
   kubectl delete statefulservice $statefulservice
   kubectl delete statefulstore $statefulstore
 fi

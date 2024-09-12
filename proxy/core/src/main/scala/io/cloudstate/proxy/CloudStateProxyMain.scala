@@ -20,7 +20,7 @@ import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicLong
 
 import com.typesafe.config.Config
-import akka.actor.{ActorSelection, ActorSystem}
+import akka.actor.{ActorSelection, ActorSystem, OneForOneStrategy, SupervisorStrategy}
 import akka.pattern.ask
 import akka.util.Timeout
 import akka.cluster.Cluster
@@ -41,7 +41,6 @@ final class HealthCheckReady(system: ActorSystem) extends (() => Future[Boolean]
     system.settings.config.getConfig("cloudstate.proxy").getDuration("ready-timeout").toMillis.millis
   private[this] final implicit val ec = system.dispatcher
   private[this] final val serverManager = system.actorSelection("/user/server-manager-supervisor/server-manager")
-  private[this] final val warmup = system.actorSelection("/user/state-manager-warm-up")
   private[this] final implicit val timeout = Timeout(timeoutMs)
 
   private[this] final def check(name: String, selection: ActorSelection, msg: Any) =
@@ -59,7 +58,6 @@ final class HealthCheckReady(system: ActorSystem) extends (() => Future[Boolean]
     Future
       .sequence(
         Seq(
-          check("warmup", warmup, Warmup.Ready),
           check("server manager", serverManager, EntityDiscoveryManager.Ready)
         )
       )
@@ -132,10 +130,11 @@ object CloudStateProxyMain {
     start(Option(config))
 
   private def start(configuration: Option[Config]): ActorSystem = {
+    // This should be fixed in Graal already
     // Must do this first, before anything uses ThreadLocalRandom
-    if (isGraalVM) {
-      initializeThreadLocalRandom()
-    }
+    // if (isGraalVM) {
+    //   initializeThreadLocalRandom()
+    // }
 
     implicit val system = configuration.fold(ActorSystem("cloudstate-proxy"))(c => ActorSystem("cloudstate-proxy", c))
     implicit val materializer = SystemMaterializer(system)
@@ -179,13 +178,18 @@ object CloudStateProxyMain {
 
     system.actorOf(
       BackoffSupervisor.props(
-        BackoffOpts.onFailure(
-          EntityDiscoveryManager.props(serverConfig),
-          childName = "server-manager",
-          minBackoff = appConfig.backoffMin,
-          maxBackoff = appConfig.backoffMax,
-          randomFactor = appConfig.backoffRandomFactor
-        )
+        BackoffOpts
+          .onFailure(
+            EntityDiscoveryManager.props(serverConfig),
+            childName = "server-manager",
+            minBackoff = appConfig.backoffMin,
+            maxBackoff = appConfig.backoffMax,
+            randomFactor = appConfig.backoffRandomFactor
+          )
+          .withSupervisorStrategy(OneForOneStrategy() {
+            // don't keep restarting and retrying if an entity discovery exception is thrown
+            case _: EntityDiscoveryException => SupervisorStrategy.Stop
+          })
       ),
       "server-manager-supervisor"
     )

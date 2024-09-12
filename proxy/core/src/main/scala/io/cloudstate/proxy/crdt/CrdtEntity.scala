@@ -46,10 +46,16 @@ object CrdtEntity {
   private final case class Relay(actorRef: ActorRef)
 
   /**
-   * This is sent by Akka streams when the gRPC stream to the user function has closed - which typically shouldn't
-   * happen unless it crashes for some reason.
+   * This is sent by Akka streams when the gRPC stream to the user function has closed - which is expected when the
+   * entity is stopping (such as for passivation) or when deleted.
    */
   final case object EntityStreamClosed
+
+  /**
+   * This is sent by Akka streams when the gRPC stream to the user function has failed - which typically shouldn't
+   * happen unless it crashes for some reason.
+   */
+  final case class EntityStreamFailed(cause: Throwable)
 
   final case object Stop
 
@@ -149,6 +155,7 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
   private[this] final var outstanding = Map.empty[Long, Initiator]
   private[this] final var streamedCalls = Map.empty[Long, ActorRef]
   private[this] final var closingStreams = Set.empty[Long]
+  private[this] final var closing = false
   private[this] final var stopping = false
 
   implicit val ec = context.dispatcher
@@ -167,7 +174,7 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
             NotUsed
           }
       )
-      .runWith(Sink.actorRef(self, EntityStreamClosed))
+      .runWith(Sink.actorRef(self, EntityStreamClosed, EntityStreamFailed.apply))
 
     // We initially do a read to get the initial state. Try a majority read first in case this is a new node.
     replicator ! Get(key, ReadMajority(configuration.initialReadTimeout))
@@ -209,25 +216,25 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
 
   private def sendDelete(): Unit = {
     if (relay != null) {
-      sendToRelay(CrdtStreamIn.Message.Deleted(CrdtDelete.defaultInstance))
+      sendToRelay(CrdtStreamIn.Message.Delete(CrdtDelete.defaultInstance))
       relay ! Status.Success(())
       relay = null
     }
     replicator ! Unsubscribe(key, self)
   }
 
-  private def maybeStart() =
+  private def maybeStart(): Unit =
     if (relay != null && state != null) {
       log.debug("{} - Received relay and state, starting.", entityId)
 
-      val wireState = state.map(WireTransformer.toWireState)
+      val initialDelta = state.map(WireTransformer.initialDelta)
 
       sendToRelay(
         CrdtStreamIn.Message.Init(
           CrdtInit(
             serviceName = configuration.serviceName,
             entityId = entityId,
-            state = wireState
+            delta = initialDelta
           )
         )
       )
@@ -248,11 +255,11 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
             case CrdtChange.IncompatibleChange =>
               throw new RuntimeException(s"Incompatible CRDT change from $value to $data for entity $entityId")
             case CrdtChange.Updated(delta) =>
-              sendToRelay(CrdtStreamIn.Message.Changed(delta))
+              sendToRelay(CrdtStreamIn.Message.Delta(delta))
           }
         }
       case None =>
-        sendToRelay(CrdtStreamIn.Message.State(WireTransformer.toWireState(data)))
+        sendToRelay(CrdtStreamIn.Message.Delta(WireTransformer.initialDelta(data)))
     }
     state = Some(data)
   }
@@ -400,9 +407,10 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
       }
 
     case EntityStreamClosed =>
-      crash("Unexpected entity termination due to stream closure")
+      if (closing) context.stop(self)
+      else crash("Unexpected entity termination due to stream closure")
 
-    case Status.Failure(cause) =>
+    case EntityStreamFailed(cause) =>
       // Means the stream stopped unexpectedly
       crash("Entity crashed", Some(cause))
 
@@ -414,7 +422,8 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
             actorRef ! Status.Success(Done)
             streamedCalls -= commandId
         }
-        context.stop(self)
+        relay ! Status.Success(())
+        closing = true // wait for stream to be closed before stopping actor
       } else {
         stopping = true
       }
@@ -493,18 +502,6 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
       case CrdtStateAction.Action.Empty =>
         sendReplyToInitiator(commandId, userFunctionReply, false)
 
-      case CrdtStateAction.Action.Create(create) =>
-        if (state.isDefined) {
-          crash("Cannot create already created entity")
-        } else {
-          val crdt = WireTransformer.stateToCrdt(create)
-          state = Some(WireTransformer.stateToCrdt(create))
-          replicator ! Update(key,
-                              crdt,
-                              toDdataWriteConsistency(stateAction.writeConsistency),
-                              Some(InitiatorReply(commandId, userFunctionReply, endStream)))(identity)
-        }
-
       case CrdtStateAction.Action.Delete(_) =>
         replicator ! Delete(key,
                             toDdataWriteConsistency(stateAction.writeConsistency),
@@ -534,7 +531,8 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
   private def operationFinished(): Unit =
     if (stopping) {
       if (outstanding.isEmpty) {
-        context.stop(self)
+        relay ! Status.Success(())
+        closing = true // wait for stream to be closed before stopping actor
       }
     } else {
       if (outstandingMutatingOperations > 1) {
@@ -669,6 +667,9 @@ final class CrdtEntity(client: Crdt, configuration: CrdtEntity.Configuration, en
       failCommand(commandId, "Failed to delete CRDT at requested write consistency")
 
     case EntityStreamClosed =>
+    // Ignore
+
+    case EntityStreamFailed(_) =>
     // Ignore
 
     case ReceiveTimeout =>

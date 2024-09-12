@@ -25,10 +25,13 @@ final case class TckProcessConfig private (
     hostname: String,
     port: Int,
     directory: File,
+    preCommand: List[String],
     command: List[String],
     stopCommand: Option[List[String]],
     envVars: Map[String, String],
-    dockerImage: String
+    dockerImage: String,
+    dockerPull: Boolean,
+    dockerArgs: List[String],
 ) {
   def validate(): Unit =
     if (dockerImage.nonEmpty) {
@@ -47,24 +50,27 @@ object TckProcessConfig {
       hostname = config.getString("hostname"),
       port = config.getInt("port"),
       directory = new File(config.getString("directory")),
+      preCommand = config.getStringList("pre-command").asScala.toList,
       command = config.getStringList("command").asScala.toList,
       stopCommand = Some(config.getStringList("stop-command").asScala.toList).filter(_.nonEmpty),
       envVars = config.getConfig("env-vars").root.unwrapped.asScala.toMap.map {
         case (key, value: AnyRef) => key -> value.toString
       },
-      dockerImage = config.getString("docker-image")
+      dockerImage = config.getString("docker-image"),
+      dockerPull = config.getBoolean("docker-pull"),
+      dockerArgs = config.getStringList("docker-args").asScala.toList
     )
 }
 
 final case class TckConfiguration private (name: String,
                                            proxy: TckProcessConfig,
-                                           frontend: TckProcessConfig,
+                                           service: TckProcessConfig,
                                            tckHostname: String,
                                            tckPort: Int) {
 
   def validate(): Unit = {
     proxy.validate()
-    frontend.validate()
+    service.validate()
     // FIXME implement
   }
 }
@@ -76,7 +82,7 @@ object TckConfiguration {
     TckConfiguration(
       name = c.getString("name"),
       proxy = TckProcessConfig.parseFrom(c.getConfig("proxy")),
-      frontend = TckProcessConfig.parseFrom(c.getConfig("frontend")),
+      service = TckProcessConfig.parseFrom(c.getConfig("service")),
       tckHostname = c.getString("tck.hostname"),
       tckPort = c.getInt("tck.port")
     )

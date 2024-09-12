@@ -22,6 +22,15 @@ package io.cloudstate.proxy.spanner
  */
 object Schema {
 
+  def ddl(journalTable: String, tagsTable: String, deletionsTable: String, snapshotsTable: String): Seq[String] =
+    List(
+      Schema.createJournalTableDdl(journalTable),
+      Schema.createTagsTableDdl(tagsTable, journalTable),
+      Schema.createDeletionsTableDdl(deletionsTable),
+      Schema.createTagsIndexDdl(tagsTable),
+      Schema.createSnapshotsTableDdl(snapshotsTable)
+    )
+
   def createJournalTableDdl(table: String): String =
     s"""|CREATE TABLE $table (
         |  persistence_id STRING(MAX) NOT NULL,
@@ -31,6 +40,9 @@ object Schema {
         |  ser_manifest STRING(MAX) NOT NULL,
         |  write_time TIMESTAMP NOT NULL OPTIONS (allow_commit_timestamp=true),
         |  writer_uuid STRING(MAX) NOT NULL,
+        |  meta BYTES(MAX),
+        |  meta_ser_id INT64,
+        |  meta_ser_manifest STRING(MAX),
         |) PRIMARY KEY (persistence_id, sequence_nr)""".stripMargin
 
   def createTagsTableDdl(table: String, journalTable: String): String =
@@ -57,9 +69,6 @@ object Schema {
         |  deleted_to INT64 NOT NULL,
         |) PRIMARY KEY (persistence_id)""".stripMargin
 
-  def tagsIndexName(table: String): String =
-    s"${table}_tag_and_offset"
-
   def createSnapshotsTableDdl(table: String): String =
     s"""|CREATE TABLE $table (
         |  persistence_id STRING(MAX) NOT NULL,
@@ -67,6 +76,12 @@ object Schema {
         |  timestamp TIMESTAMP NOT NULL,
         |  ser_id INT64 NOT NULL,
         |  ser_manifest STRING(MAX) NOT NULL,
-        |  snapshot BYTES(MAX)
+        |  snapshot BYTES(MAX),
+        |  meta BYTES(MAX),
+        |  meta_ser_id INT64,
+        |  meta_ser_manifest STRING(MAX),
         |) PRIMARY KEY (persistence_id, sequence_nr)""".stripMargin
+
+  private def tagsIndexName(table: String) =
+    s"${table}_tag_and_offset"
 }
